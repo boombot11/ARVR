@@ -74,4 +74,4 @@ class Refiner(torch.nn.Module):
         volumes_32_r = (volumes_32_l + self.layer8(volumes_16_r)) * 0.5
         # print(volumes_32_r.size())       # torch.Size([batch_size, 1, 32, 32, 32])
 
-        return volumes_32_r.view(-1, self.cfg.CONST['N_VOX'], self.cfg.CONST['N_VOX'], self.cfg.CONST['N_VOX'])
+        return volumes_32_r.view((-1, self.cfg.CONST['N_VOX'], self.cfg.CONST['N_VOX'], self.cfg.CONST['N_VOX']))

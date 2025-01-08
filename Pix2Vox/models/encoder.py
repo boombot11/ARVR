@@ -8,6 +8,7 @@
 import torch
 import torchvision.models
 
+
 class Encoder(torch.nn.Module):
     def __init__(self, cfg):
         super(Encoder, self).__init__()
@@ -32,44 +33,28 @@ class Encoder(torch.nn.Module):
             torch.nn.BatchNorm2d(256),
             torch.nn.ELU()
         )
-        self.layer4 = torch.nn.Sequential(
-            torch.nn.Conv2d(256, 2048, kernel_size=3),  # This increases channels to 2048
-            torch.nn.BatchNorm2d(2048),
-            torch.nn.ELU(),
-        )
-        self.layer5 = torch.nn.Sequential(
-            torch.nn.Conv2d(2048, 2048, kernel_size=3, stride=2),  # Downsample to [2048, 5, 5]
-            torch.nn.BatchNorm2d(2048),
-            torch.nn.ELU(),
-        )
-        self.layer6 = torch.nn.Sequential(
-            torch.nn.Conv2d(2048, 2048, kernel_size=3, stride=2),  # Further downsample to [2048, 2, 2]
-            torch.nn.BatchNorm2d(2048),
-            torch.nn.ELU(),
-        )
-
-        # Add upsampling layer to match the decoder input shape
-        self.upsample = torch.nn.ConvTranspose2d(2048, 2048, kernel_size=4, stride=2, padding=1)
 
         # Don't update params in VGG16
         for param in vgg16_bn.parameters():
             param.requires_grad = False
 
     def forward(self, rendering_images):
+        # print(rendering_images.size())  # torch.Size([batch_size, n_views, img_c, img_h, img_w])
         rendering_images = rendering_images.permute(1, 0, 2, 3, 4).contiguous()
         rendering_images = torch.split(rendering_images, 1, dim=0)
         image_features = []
 
         for img in rendering_images:
             features = self.vgg(img.squeeze(dim=0))
+            # print(features.size())    # torch.Size([batch_size, 512, 28, 28])
             features = self.layer1(features)
+            # print(features.size())    # torch.Size([batch_size, 512, 26, 26])
             features = self.layer2(features)
+            # print(features.size())    # torch.Size([batch_size, 512, 24, 24])
             features = self.layer3(features)
-            features = self.layer4(features)
-            features = self.layer5(features)  # Downsample to [2048, 5, 5]
-            features = self.layer6(features)  # Further downsample to [2048, 2, 2]
-            features = self.upsample(features)  # Upsample to [2048, 4, 4] or [2048, 2, 2]
+            # print(features.size())    # torch.Size([batch_size, 256, 8, 8])
             image_features.append(features)
 
         image_features = torch.stack(image_features).permute(1, 0, 2, 3, 4).contiguous()
+        # print(image_features.size())  # torch.Size([batch_size, n_views, 256, 8, 8])
         return image_features

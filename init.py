@@ -38,6 +38,8 @@ cfg = Config()
 
 # Initialize Pix2Vox model components
 def load_pix2vox_model(model_path: str, device: str = 'cpu'):
+    if not os.path.exists(model_path):
+        raise FileNotFoundError(f"Model file not found: {model_path}")
     encoder = Encoder(cfg)
     decoder = Decoder(cfg)
     refiner = Refiner(cfg)
@@ -100,8 +102,12 @@ def generate_3d_model(encoder, decoder, refiner, merger, image_bytes, n_views=1)
 
         batch_size, n_views, channels, height, width = image_features.shape
 
+        # Ensure the input to the decoder is correctly reshaped
         decoder_input = image_features.view(batch_size, n_views, channels, 1, height, width)
         decoder_input = decoder_input.squeeze(3)
+
+        # Debug: Check input shape before passing to decoder
+        print(f"Decoder input shape: {decoder_input.shape}")
 
         raw_features, generated_volumes = decoder(decoder_input)
 
@@ -133,6 +139,8 @@ def save_volume_to_file(volume_tensor, filename):
     return save_path
 
 # POST endpoint to handle image upload and generate 3D model
+import traceback
+
 @app.post("/upload/")
 async def upload_image(file: UploadFile = File(...)):
     model_path = 'models/Pix2Vox-A-ShapeNet.pth'  # Update to correct path
@@ -151,23 +159,17 @@ async def upload_image(file: UploadFile = File(...)):
 
         # Save the generated model to a .npy file in the 'generated' folder
         volume_filename = f"generated_model_{file.filename}.npy"
-        volume_filename="3dmodel.npy"
+        volume_filename = "3dmodel.npy"
         file_path = save_volume_to_file(generated_volumes, volume_filename)
-        # npy_data = np.load('./generated/3dmodel.npy')
 
-        # # Print the shape of the data
-        # print(f"Shape of the data: {npy_data.shape}")
-
-        # # Check the data type to ensure it's correct
-        # print(f"Data type: {npy_data.dtype}")
-
-        # # Optionally, check some of the values to make sure it's not empty
-        # print(f"Some of the values: {npy_data[:5]}")  # Print first 5 values
-        # Return the file path to the frontend
         return JSONResponse(content={"message": "File uploaded and model generated successfully!", "model_file": f"/generated/3dmodel.npy"})
     
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error generating model: {str(e)}")
+        # Log the full traceback to debug the error
+        error_details = traceback.format_exc()
+        print("Error Details:\n", error_details)  # Log error to console (or store in a log file)
+        raise HTTPException(status_code=500, detail=f"Error generating model: {str(e)}\n{error_details}")
+
 
 # GET endpoint to retrieve the .npy model file for rendering
 @app.get("/generated/{filename}")

@@ -9,7 +9,11 @@ class Decoder(torch.nn.Module):
         super(Decoder, self).__init__()
         self.cfg = cfg
 
-        # Layer Definition
+        # Adding a Linear layer to adapt input size to match expected decoder input.
+        # This is necessary because the input tensor size does not directly match the expected size.
+        self.linear = torch.nn.Linear(20736, 2048 * 2 * 2 * 2)  # Adjust size here
+
+        # Layer Definitions (keep as is, as we cannot change the original network structure)
         self.layer1 = torch.nn.Sequential(
             torch.nn.ConvTranspose3d(2048, 512, kernel_size=4, stride=2, bias=cfg.NETWORK['TCONV_USE_BIAS'], padding=1),
             torch.nn.BatchNorm3d(512),
@@ -36,33 +40,32 @@ class Decoder(torch.nn.Module):
         )
 
     def forward(self, image_features):
-        image_features = image_features.permute(1, 0, 2, 3, 4).contiguous()
-        image_features = torch.split(image_features, 1, dim=0)
-        gen_volumes = []
-        raw_features = []
+        print(f"Decoder input shape: {image_features.shape}")
+        
+        # Flatten the input tensor
+        flattened_size = image_features.numel()
+        print(f"Flattened input size: {flattened_size}")
+        
+        # Check if the flattened size matches what we expect
+        if flattened_size != 20736:
+            raise ValueError(f"Unexpected flattened size: {flattened_size}.")
+        
+        # Use the Linear layer to adjust the size to match the decoder's input shape
+        image_features = image_features.view(-1)  # Flatten the tensor to 1D
+        image_features = self.linear(image_features)  # Adjust it to match the required size
+        
+        # Now reshape the output of the Linear layer to the expected shape for the decoder
+        image_features = image_features.view(1, 2048, 2, 2, 2)  # Reshape to match the decoder's expected input size
+        print(f"Reshaped image_features to {image_features.shape}")
 
-        for features in image_features:
-            gen_volume = features.view(-1, 2048, 1, 2, 2)
-            # print(gen_volume.size())   # torch.Size([batch_size, 2048, 2, 2, 2])
-            gen_volume = self.layer1(gen_volume)
-            # print(gen_volume.size())   # torch.Size([batch_size, 512, 4, 4, 4])
-            gen_volume = self.layer2(gen_volume)
-            # print(gen_volume.size())   # torch.Size([batch_size, 128, 8, 8, 8])
-            gen_volume = self.layer3(gen_volume)
-            # print(gen_volume.size())   # torch.Size([batch_size, 32, 16, 16, 16])
-            gen_volume = self.layer4(gen_volume)
-            raw_feature = gen_volume
-            # print(gen_volume.size())   # torch.Size([batch_size, 8, 32, 32, 32])
-            gen_volume = self.layer5(gen_volume)
-            # print(gen_volume.size())   # torch.Size([batch_size, 1, 32, 32, 32])
-            raw_feature = torch.cat((raw_feature, gen_volume), dim=1)
-            # print(raw_feature.size())  # torch.Size([batch_size, 9, 32, 32, 32])
+        # Proceed with the rest of the layers
+        gen_volume = self.layer1(image_features)
+        gen_volume = self.layer2(gen_volume)
+        gen_volume = self.layer3(gen_volume)
+        gen_volume = self.layer4(gen_volume)
+        
+        raw_feature = gen_volume  # Store raw feature before the last layer
+        gen_volume = self.layer5(gen_volume)
+        raw_feature = torch.cat((raw_feature, gen_volume), dim=1)
 
-            gen_volumes.append(torch.squeeze(gen_volume, dim=1))
-            raw_features.append(raw_feature)
-
-        gen_volumes = torch.stack(gen_volumes).permute(1, 0, 2, 3, 4).contiguous()
-        raw_features = torch.stack(raw_features).permute(1, 0, 2, 3, 4, 5).contiguous()
-        # print(gen_volumes.size())      # torch.Size([batch_size, n_views, 32, 32, 32])
-        # print(raw_features.size())     # torch.Size([batch_size, n_views, 9, 32, 32, 32])
-        return raw_features, gen_volumes
+        return raw_feature, gen_volume

@@ -3,6 +3,7 @@ UI/arvr-frontend/node_modules/
 UI/arvr-frontend/build/
 Pix2Vox/core
 models/Pix2Vox-A-ShapeNet.pth
+models/Pix2Vox-F-ShapeNet.pth
 Pix2Vox/datasets
 Pix2Vox/utils
 static

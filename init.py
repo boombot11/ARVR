@@ -28,8 +28,8 @@ class Config:
             'TCONV_USE_BIAS': True,
             'LEAKY_VALUE': 0.1
         }
-        self.CONST={
-            'N_VOX':32
+        self.CONST = {
+            'N_VOX': 32
         }
 
 cfg = Config()
@@ -88,29 +88,36 @@ def load_pix2vox_model(model_path: str, device: str = 'cpu'):
 
     return encoder, decoder, refiner, merger
 
-# Image preprocessing function
-def preprocess_image(image_bytes):
-    image = Image.open(io.BytesIO(image_bytes)).convert('RGB')
+# Image preprocessing function for handling multiple images
+def preprocess_images(image_bytes_list):
+    images = []
     transform = transforms.Compose([
         transforms.Resize((256, 256)),  # Resize to expected size
         transforms.ToTensor(),
         transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
     ])
-    image = transform(image).unsqueeze(0)  # Add batch dimension
-    return image
+    
+    for image_bytes in image_bytes_list:
+        image = Image.open(io.BytesIO(image_bytes)).convert('RGB')
+        image = transform(image).unsqueeze(0)  # Add batch dimension
+        images.append(image)
+    
+    # Stack images along the batch dimension (combine all images)
+    return torch.cat(images, dim=0)  # Result will be [n_images, 3, 256, 256]
 
-def generate_3d_model(encoder, decoder, refiner, merger, image_bytes, n_views=1):
-    # Preprocess the input image
-    image = preprocess_image(image_bytes)
-    print(f"Input image shape: {image.shape}")  # Print input tensor shape
 
-    # Reshape the image to have the shape [1, n_views, 3, 256, 256]
-    image = image.unsqueeze(0).repeat(1, n_views, 1, 1, 1)  # Repeat for n_views
-    print(f"Adjusted image shape (for n_views): {image.shape}")  # Should be [1, n_views, 3, 256, 256]
+def generate_3d_model(encoder, decoder, refiner, merger, image_bytes_list, n_views=1):
+    # Preprocess the input images
+    images = preprocess_images(image_bytes_list)
+    print(f"Input images shape: {images.shape}")  # [n_images, 3, 256, 256]
+
+    # Reshape the images to have the shape [1, n_views, 3, 256, 256]
+    images = images.unsqueeze(0).repeat(1, n_views, 1, 1, 1)  # Repeat for n_views if needed
+    print(f"Adjusted image shape (for n_views): {images.shape}")  # [1, n_views, n_images, 256, 256]
 
     with torch.no_grad():
         # Pass through the encoder
-        image_features = encoder(image)  # Shape: [1, n_views, 2048, 2, 2]
+        image_features = encoder(images)  # Shape: [1, n_views, 2048, 2, 2]
         print(f"Image features shape: {image_features.shape}")  # Print image features shape
 
         # Prepare input for the decoder
@@ -139,33 +146,38 @@ def generate_3d_model(encoder, decoder, refiner, merger, image_bytes, n_views=1)
 
         # If the refiner exists, apply the refiner
         if refiner:
-            refined_volumes = refiner(generated_volumes)  # Shape: [1, 32, 32, 32]
+            refined_volumes = refiner(generated_volumes)  # Shape: [batch_size, 32, 32, 32]
             print(f"Refined volumes shape: {refined_volumes.shape}")  # Print refined volumes shape
 
             # Expand the refined volumes to 9 channels by repeating
             refined_volumes = refined_volumes.unsqueeze(1).repeat(1, 9, 1, 1, 1)
-            print(f"Refined volumes after expansion: {refined_volumes.shape}")  # Should be [1, 9, 32, 32, 32]
+            print(f"Refined volumes after expansion: {refined_volumes.shape}")  # Should be [batch_size, 9, 32, 32, 32]
+
+        # Fix the raw_features dimension issue
+        print(f"Raw features shape before reshaping: {raw_features.shape}")
+
+        # The key fix: Squeeze the unnecessary dimension (3 in this case)
+        raw_features = raw_features.squeeze(1)  # Remove the channel dimension
+        print(f"Raw features shape after squeezing: {raw_features.shape}")  # Should be [batch_size, 9, 16, 32, 32]
+
+        # If raw_features has more dimensions than expected, you may need to reshape to match the target shape
+        if raw_features.shape[1] != 9:
+            # Reshape the raw_features to have the correct shape if necessary
+            raw_features = raw_features.view(batch_size, 9, 16, 32, 32)
+            print(f"Raw features shape after reshaping: {raw_features.shape}")
 
         # Merge the final volumes if the merger exists
         if merger:
             # Ensure `raw_features` has the correct shape for the Merger
-            raw_features = raw_features.squeeze(1)  # Now should be [1, 9, 16, 32, 32]
-            print(f"Fixed raw features shape: {raw_features.shape}")  # Confirm new shape
+            print(f"Raw features shape before passing to Merger: {raw_features.shape}")
+            print(f"Refined volumes shape before passing to Merger: {refined_volumes.shape}")
 
-            # Ensure refined_volumes has the correct shape
-            print(f"Refined volumes shape before passing to Merger: {refined_volumes.shape}")  # Should remain [1, 9, 32, 32, 32]
-
-            # Interpolate raw_features to match the refined_volumes' size
-            raw_features = torch.nn.functional.interpolate(
-                raw_features, size=(32, 32, 32), mode='trilinear', align_corners=False
-            )
-
-            # Now pass both tensors to the Merger (they should have matching shapes)
-            final_volumes = merger(raw_features, refined_volumes)  # Shape: [1, 32, 32, 32]
+            # Pass both tensors to the Merger (they should have matching shapes)
+            final_volumes = merger(raw_features, refined_volumes)  # Shape: [batch_size, 32, 32, 32]
             print(f"Final merged volumes shape: {final_volumes.shape}")
 
-
         return final_volumes
+
 
 
 
@@ -175,30 +187,31 @@ def save_volume_to_file(volume_tensor, filename):
     np.save(filename, volume)  # Save as a .npy file
 
 @app.post("/upload/")
-async def upload_image(file: UploadFile = File(...)):
-    print("File received:", file)
+async def upload_images(file: list[UploadFile] = File(...)):
+    print("Files received:", len(file))
     model_path = 'models/Pix2Vox-A-ShapeNet.pth'  # Update to correct path
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     encoder, decoder, refiner, merger = load_pix2vox_model(model_path, device)
+
     if not file:
-        raise HTTPException(status_code=400, detail="No file uploaded")
+        raise HTTPException(status_code=400, detail="No files uploaded")
     
     try:
         # Read the file bytes
-        image_bytes = await file.read()
+        image_bytes_list = [await file.read() for file in file]
         print("File bytes read successfully.")
         
-        # Generate 3D model from the image
-        generated_volumes = generate_3d_model(encoder, decoder, refiner, merger, image_bytes)
+        # Generate 3D model from the images
+        generated_volumes = generate_3d_model(encoder, decoder, refiner, merger, image_bytes_list)
         print("Model generated successfully.")
         
         # Save the generated model to a .npy file
-        volume_filename = f"generated_model_{file.filename}.npy"
+        volume_filename = f"generated_model.npy"
         save_volume_to_file(generated_volumes, volume_filename)
         print(f"Model saved to {volume_filename}")
         
         # Return the file path or a success message
-        return JSONResponse(content={"message": "File uploaded and model generated successfully!", "model_file": volume_filename})
+        return JSONResponse(content={"message": "Files uploaded and model generated successfully!", "model_file": volume_filename})
     
     except Exception as e:
         print(f"Error: {str(e)}")

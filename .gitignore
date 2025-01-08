@@ -1,0 +1,13 @@
+# Ignore node_modules (React-related dependencies)
+UI/arvr-frontend/node_modules/
+UI/arvr-frontend/build/
+Pix2Vox/core
+models/Pix2Vox-A-ShapeNet.pth
+Pix2Vox/datasets
+Pix2Vox/utils
+static
+*.log
+
+# Ignore environment files (if any)
+*.env
+

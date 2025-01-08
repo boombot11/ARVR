@@ -17,8 +17,8 @@ const App = () => {
         });
 
         const data = await response.json();
-        if (data.model_path) {
-            setModelUrl(data.model_path);  // Get the generated model path from the response
+        if (data.model_file) {
+            setModelUrl(data.model_file);  // Access model_file instead of model_path
         } else {
             alert('Error generating model');
         }
@@ -34,7 +34,7 @@ const App = () => {
                     <h3>Generated 3D Model</h3>
                     <iframe
                         title="3D Model Viewer"
-                        src={`http://localhost:8000${modelUrl}`}  // Assuming you return the correct model path
+                        src={`http://localhost:8000${modelUrl}`}  // Assuming the model file is accessible via this URL
                         style={{ width: "600px", height: "400px" }}
                     ></iframe>
                 </div>

@@ -10,7 +10,9 @@ from Pix2Vox.models.refiner import Refiner
 from Pix2Vox.models.merger import Merger
 import torchvision.transforms as transforms
 from PIL import Image
+import skimage
 import io
+import trimesh
 
 app = FastAPI()
 
@@ -90,7 +92,9 @@ def preprocess_image(image_bytes):
     image = transform(image).unsqueeze(0)  # Add batch dimension
     return image
 
-def generate_3d_model(encoder, decoder, refiner, merger, image_bytes, n_views=1):
+
+
+def generate_3d_model_as_gltf(encoder, decoder, refiner, merger, image_bytes, n_views=1):
     image = preprocess_image(image_bytes)
 
     # Reshape the image to have the shape [1, n_views, 3, 256, 256]
@@ -105,13 +109,7 @@ def generate_3d_model(encoder, decoder, refiner, merger, image_bytes, n_views=1)
         decoder_input = image_features.view(batch_size, n_views, channels, 1, height, width)
         decoder_input = decoder_input.squeeze(3)
 
-        # Debug: Check input shape before passing to decoder
-        print(f"Decoder input shape: {decoder_input.shape}")
-
         raw_features, generated_volumes = decoder(decoder_input)
-
-        # Debug: Check output shape from decoder
-        print(f"Decoder output shape: {raw_features.shape}")
 
         # Ensure generated volumes are the right size
         if generated_volumes.shape[2] != 32:
@@ -128,7 +126,6 @@ def generate_3d_model(encoder, decoder, refiner, merger, image_bytes, n_views=1)
 
             # Ensure that raw_features has 9 channels as expected by the Merger
             if raw_features.size(1) != 9:
-                print(f"Reshaping raw_features to have 9 channels... Initial shape: {raw_features.shape}")
                 raw_features = raw_features.repeat(1, 9, 1, 1, 1)  # Repeat to get 9 channels if necessary
 
             # Ensure that raw_features has the correct spatial size (32, 32, 32)
@@ -137,14 +134,21 @@ def generate_3d_model(encoder, decoder, refiner, merger, image_bytes, n_views=1)
                     raw_features, size=(32, 32, 32), mode='trilinear', align_corners=False
                 )
 
-            # Debug: Check raw_features shape before passing to Merger
-            raw_features = raw_features.squeeze(1)
-            if raw_features.size(1) != 9:
-             raw_features = raw_features.repeat(1, 9, 1, 1, 1)  # Repeat to get 9 channels if necessary
-            print(f"Raw features shape before passing to Merger: {raw_features.shape}")
-          
             final_volumes = merger(raw_features, refined_volumes)
-            return final_volumes
+
+        # Convert voxel grid to mesh using a Marching Cubes algorithm (e.g., trimesh)
+        # Convert volume to a binary format (binary voxel grid)
+        volume = final_volumes.squeeze().cpu().numpy() > 0.5  # threshold to binary
+
+        # Generate the mesh (assuming binary volume)
+        mesh = trimesh.voxel.ops.matrix_to_marching_cubes(volume)
+
+        # Export the mesh to glTF format
+        gltf_file_path = os.path.join('generated', 'generated_model.glb')
+        mesh.export(gltf_file_path, file_type='glb')
+
+        return gltf_file_path
+
 
         return generated_volumes
 
@@ -171,15 +175,10 @@ async def upload_image(file: UploadFile = File(...)):
         # Read the file bytes
         image_bytes = await file.read()
 
-        # Generate 3D model from the image
-        generated_volumes = generate_3d_model(encoder, decoder, refiner, merger, image_bytes)
+        # Generate 3D model as glTF from the image
+        gltf_file_path = generate_3d_model_as_gltf(encoder, decoder, refiner, merger, image_bytes)
 
-        # Save the generated model to a .npy file in the 'generated' folder
-        volume_filename = f"generated_model_{file.filename}.npy"
-        volume_filename = "3dmodel.npy"
-        file_path = save_volume_to_file(generated_volumes, volume_filename)
-
-        return JSONResponse(content={"message": "File uploaded and model generated successfully!", "model_file": f"/generated/3dmodel.npy"})
+        return JSONResponse(content={"message": "File uploaded and model generated successfully!", "model_file": '/generated/generated_model.glb'})
     
     except Exception as e:
         # Log the full traceback to debug the error

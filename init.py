@@ -90,7 +90,6 @@ def preprocess_image(image_bytes):
     image = transform(image).unsqueeze(0)  # Add batch dimension
     return image
 
-# Generate 3D model
 def generate_3d_model(encoder, decoder, refiner, merger, image_bytes, n_views=1):
     image = preprocess_image(image_bytes)
 
@@ -111,6 +110,10 @@ def generate_3d_model(encoder, decoder, refiner, merger, image_bytes, n_views=1)
 
         raw_features, generated_volumes = decoder(decoder_input)
 
+        # Debug: Check output shape from decoder
+        print(f"Decoder output shape: {raw_features.shape}")
+
+        # Ensure generated volumes are the right size
         if generated_volumes.shape[2] != 32:
             generated_volumes = torch.nn.functional.interpolate(
                 generated_volumes, size=(32, 32, 32), mode='trilinear', align_corners=False
@@ -122,10 +125,24 @@ def generate_3d_model(encoder, decoder, refiner, merger, image_bytes, n_views=1)
 
         if merger:
             raw_features = raw_features.squeeze(1)
-            raw_features = torch.nn.functional.interpolate(
-                raw_features, size=(32, 32, 32), mode='trilinear', align_corners=False
-            )
 
+            # Ensure that raw_features has 9 channels as expected by the Merger
+            if raw_features.size(1) != 9:
+                print(f"Reshaping raw_features to have 9 channels... Initial shape: {raw_features.shape}")
+                raw_features = raw_features.repeat(1, 9, 1, 1, 1)  # Repeat to get 9 channels if necessary
+
+            # Ensure that raw_features has the correct spatial size (32, 32, 32)
+            if raw_features.shape[2:] != (32, 32, 32):
+                raw_features = torch.nn.functional.interpolate(
+                    raw_features, size=(32, 32, 32), mode='trilinear', align_corners=False
+                )
+
+            # Debug: Check raw_features shape before passing to Merger
+            raw_features = raw_features.squeeze(1)
+            if raw_features.size(1) != 9:
+             raw_features = raw_features.repeat(1, 9, 1, 1, 1)  # Repeat to get 9 channels if necessary
+            print(f"Raw features shape before passing to Merger: {raw_features.shape}")
+          
             final_volumes = merger(raw_features, refined_volumes)
             return final_volumes
 
